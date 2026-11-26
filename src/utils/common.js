@@ -820,6 +820,71 @@ export async function logConversation(type, content, logMode, logFilename) {
 }
 
 /**
+ * 完整对话存档（PROMPT_LOG_MODE = 'full'）。
+ *
+ * 与 logConversation 的差异：后者只记每轮最后一条消息的纯文本（历史轮次、
+ * tool_use / tool_result 块、system 全部丢弃）；本函数把完整请求体与完整
+ * 响应体按 JSONL 逐对话落盘，request 行与 response 行经 requestId 关联：
+ *
+ *   {"ts":"ISO 时间","type":"request","requestId":"...","model":"...",
+ *    "provider":"...","body":{"system":..., "messages":[... 含 tool_use ...]}}
+ *   {"ts":"...","type":"response","requestId":"...","model":"...",
+ *    "provider":"...","body":{... 原样响应 ...}}
+ *
+ * 日志文件路径与常规模式解耦：logs/conversation-full-<启动时间戳>.jsonl
+ * （logs 目录已存在；不与 PROMPT_LOG_FILENAME 混写，避免格式互相污染）。
+ * 写失败仅记错误日志，绝不影响主请求链路。
+ *
+ * 2026-11-26 fork fucheng830/AIClient2API feat/full-conversation-logging
+ */
+const CONVERSATION_LOG_PREFIX = 'logs/conversation-full-';
+let _conversationLogFilename = null;
+
+export function initConversationFullLogFilename() {
+    // 启动时（api-server.js）调用一次：生成带启动时间戳的文件名，进程存活期内追加同一文件
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    _conversationLogFilename = `${CONVERSATION_LOG_PREFIX}${timestamp}.jsonl`;
+    return _conversationLogFilename;
+}
+
+export function getConversationFullLogFilename() {
+    return _conversationLogFilename;
+}
+
+export async function logConversationFull(type, payload, logMode, { model, provider, requestId } = {}) {
+    if (logMode !== 'full') return;
+    if (!_conversationLogFilename) return;
+    if (payload === undefined || payload === null) return;
+
+    const entry = {
+        ts: new Date().toISOString(),
+        type, // 'request' | 'response'
+        requestId: requestId ?? null,
+        model: model ?? null,
+        provider: provider ?? null,
+    };
+    // request 行的 body=完整请求体（深拷贝后剥掉 _ 开头的内部字段，如 _monitorRequestId）
+    // response 行的 body=完整响应体（字符串或对象原样）
+    if (type === 'request' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const clean = {};
+        for (const key of Object.keys(payload)) {
+            if (!key.startsWith('_')) clean[key] = payload[key];
+        }
+        entry.body = clean;
+    } else {
+        entry.body = payload;
+    }
+
+    try {
+        // logs 目录兜底（logger 也会建；本函数被独立调用/首次写入时可能不存在）
+        await fs.mkdir(path.dirname(_conversationLogFilename), { recursive: true });
+        await fs.appendFile(_conversationLogFilename, JSON.stringify(entry) + '\n', 'utf-8');
+    } catch (err) {
+        logger.error(`[Error] Failed to write full conversation log to ${_conversationLogFilename}:`, err && err.message);
+    }
+}
+
+/**
  * Checks if the request is authorized based on API key.
  * @param {http.IncomingMessage} req - The HTTP request object.
  * @param {URL} requestUrl - The parsed URL object.
@@ -1671,6 +1736,13 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 只在首次请求时记录日志（避免重试时重复记录）
         if (!isRetry) {
             await logConversation('output', fullResponseText, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME);
+            // 完整对话存档：流式响应的最终聚合 JSON（含 tool_use 块、stop_reason 等）
+            // fullResponseJson 可能因 provider 未聚合而为空串，此时回落 fullResponseText
+            await logConversationFull('response', fullResponseJson || fullResponseText || null, PROMPT_LOG_MODE, {
+                model,
+                provider: toProvider,
+                requestId: getPluginHookRequestId(CONFIG),
+            });
         }
         // fs.writeFile('oldResponseChunk'+Date.now()+'.json', fullOldResponseJson);
         // fs.writeFile('responseChunk'+Date.now()+'.json', fullResponseJson);
@@ -1733,6 +1805,12 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         //logger.info(`[Response] Sending response to client: ${JSON.stringify(clientResponse)}`);
         await handleUnifiedResponse(res, JSON.stringify(clientResponse), false);
         await logConversation('output', responseText, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME);
+        // 完整对话存档：一元请求的客户端响应体原样落盘（含 tool_use 块、stop_reason、usage）
+        await logConversationFull('response', clientResponse, PROMPT_LOG_MODE, {
+            model,
+            provider: fromProvider,
+            requestId: getPluginHookRequestId(CONFIG),
+        });
         // fs.writeFile('oldResponse'+Date.now()+'.json', JSON.stringify(clientResponse));
         
         // 一元请求成功完成，统计使用次数，错误次数重置为0
@@ -2191,6 +2269,14 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     }
 
     await logConversation('input', promptText, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME);
+
+    // 4.2 完整对话存档（PROMPT_LOG_MODE='full'）：在 strategy 文本提取之前记完整请求体
+    // （含全部历史 messages、tool_use / tool_result 块、system），与 response 行经 requestId 关联
+    await logConversationFull('request', processedRequestBody, CONFIG.PROMPT_LOG_MODE, {
+        model,
+        provider: toProvider,
+        requestId: CONFIG?._monitorRequestId || null,
+    });
     
     // 5. Call the appropriate stream or unary handler, passing the provider info.
     // 创建重试上下文，包含 CONFIG 以便在认证错误时切换凭证重试

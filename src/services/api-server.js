@@ -120,7 +120,7 @@ import { initializeAdminPassword } from '../ui-modules/auth.js';
 import 'dotenv/config'; // Import dotenv and configure it
 import '../converters/register-converters.js'; // 注册所有转换器
 import { getProviderPoolManager } from './service-manager.js';
-import { isRetryableNetworkError } from '../utils/common.js';
+import { isRetryableNetworkError, getConversationFullLogFilename } from '../utils/common.js';
 
 // 检测是否作为子进程运行
 const IS_WORKER_PROCESS = process.env.IS_WORKER_PROCESS === 'true';
@@ -331,7 +331,7 @@ async function startServer() {
         logger.info(`  Host: ${CONFIG.HOST}`);
         logger.info(`  Port: ${CONFIG.SERVER_PORT}`);
         logger.info(`  Required API Key: ${CONFIG.REQUIRED_API_KEY ? CONFIG.REQUIRED_API_KEY.slice(0, 4) + '****' : '(none)'}`);
-        logger.info(`  Prompt Logging: ${CONFIG.PROMPT_LOG_MODE}${CONFIG.PROMPT_LOG_FILENAME ? ` (to ${CONFIG.PROMPT_LOG_FILENAME})` : ''}`);
+        logger.info(`  Prompt Logging: ${CONFIG.PROMPT_LOG_MODE}${CONFIG.PROMPT_LOG_FILENAME ? ` (to ${CONFIG.PROMPT_LOG_FILENAME})` : ''}${CONFIG.PROMPT_LOG_MODE === 'full' ? ` (full conversations to ${getConversationFullLogFilename()})` : ''}`);
         logger.info(`------------------------------------------`);
         logger.info(`\nUnified API Server running on http://${CONFIG.HOST}:${CONFIG.SERVER_PORT}`);
         logger.info(`Supports multiple API formats:`);

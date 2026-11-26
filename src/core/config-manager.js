@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
-import { DEFAULT_REQUEST_BODY_MAX_BYTES, INPUT_SYSTEM_PROMPT_FILE } from '../utils/common.js';
+import { DEFAULT_REQUEST_BODY_MAX_BYTES, INPUT_SYSTEM_PROMPT_FILE, initConversationFullLogFilename } from '../utils/common.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 import logger from '../utils/logger.js';
 
@@ -180,7 +180,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
     // type: 'string' | 'int' | 'bool' | 'enum'
     const cliArgDefs = [
         { flag: '--api-key',              configKey: 'REQUIRED_API_KEY',       type: 'string' },
-        { flag: '--log-prompts',          configKey: 'PROMPT_LOG_MODE',        type: 'enum', validValues: ['console', 'file'] },
+        { flag: '--log-prompts',          configKey: 'PROMPT_LOG_MODE',        type: 'enum', validValues: ['console', 'file', 'full'] },
         { flag: '--port',                 configKey: 'SERVER_PORT',            type: 'int' },
         { flag: '--model-provider',       configKey: 'MODEL_PROVIDER',         type: 'string' },
         { flag: '--system-prompt-file',   configKey: 'SYSTEM_PROMPT_FILE_PATH', type: 'string' },
@@ -306,6 +306,17 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         PROMPT_LOG_FILENAME = `${currentConfig.PROMPT_LOG_BASE_NAME}-${timestamp}.log`;
     } else {
         PROMPT_LOG_FILENAME = ''; // Clear if not logging to file
+    }
+
+    // 完整对话存档（PROMPT_LOG_MODE='full'）：启动时生成 conversation-full-<ts>.jsonl 文件名
+    if (currentConfig.PROMPT_LOG_MODE === 'full') {
+        try {
+            const conversationLogFilename = initConversationFullLogFilename();
+            logger.info(`[Config] Full conversation logging enabled: ${conversationLogFilename}`);
+        } catch (err) {
+            logger.error(`[Config Error] Failed to init full conversation log: ${err && err.message}`);
+            // 初始化失败不阻断启动；logConversationFull 检查文件名为空即静默跳过
+        }
     }
 
     // Assign to the exported CONFIG
