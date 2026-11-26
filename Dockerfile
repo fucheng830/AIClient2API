@@ -5,6 +5,9 @@ ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ENV HTTP_PROXY=$HTTP_PROXY
 ENV HTTPS_PROXY=$HTTPS_PROXY
+# 国内构建机直连 proxy.golang.org 超时:GOPROXY 走 goproxy.cn(build-arg 可覆盖)
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=$GOPROXY
 
 RUN apk add --no-cache git
 
