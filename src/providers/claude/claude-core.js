@@ -142,10 +142,27 @@ export class ClaudeApiService {
             this._applySidecar(axiosConfig);
             const response = await this.client.request(axiosConfig);
             const reader = response.data;
+            // FFFD hot-fix (2026-11-25): decode only complete UTF-8 sequences.
+            let byteBuf = Buffer.alloc(0);
             let buffer = '';
+            const NLNL = String.fromCharCode(10, 10);
+            const decodeSafe = (chunk) => {
+                byteBuf = byteBuf.length ? Buffer.concat([byteBuf, chunk]) : (chunk instanceof Buffer ? chunk : Buffer.from(chunk));
+                let end = byteBuf.length;
+                for (let i = byteBuf.length - 1; i >= 0 && byteBuf.length - i <= 4; i--) {
+                    const b = byteBuf[i];
+                    if ((b & 0x80) === 0) { end = i + 1; break; }
+                    if ((b & 0xE0) === 0xC0) { end = (i + 2 <= byteBuf.length) ? byteBuf.length : i; break; }
+                    if ((b & 0xF0) === 0xE0) { end = (i + 3 <= byteBuf.length) ? byteBuf.length : i; break; }
+                    if ((b & 0xF8) === 0xF0) { end = (i + 4 <= byteBuf.length) ? byteBuf.length : i; break; }
+                }
+                const text = byteBuf.slice(0, end).toString('utf-8');
+                byteBuf = byteBuf.slice(end);
+                return text;
+            };
 
             for await (const chunk of reader) {
-                buffer += chunk.toString('utf-8');
+                buffer += decodeSafe(chunk);
                 let boundary;
                 while ((boundary = buffer.indexOf('\n\n')) !== -1) {
                     const eventBlock = buffer.substring(0, boundary);
@@ -172,6 +189,11 @@ export class ClaudeApiService {
                     }
                 }
             }
+            if (byteBuf.length > 0) {
+                buffer += byteBuf.toString('utf-8');
+                byteBuf = Buffer.alloc(0);
+            }
+            // flush any complete events remaining in buffer after stream end
         } catch (error) {
             const status = error.response?.status;
             const errorCode = error.code;
